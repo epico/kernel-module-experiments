@@ -3,31 +3,24 @@
  * processvminfo.c
  *
  * Linux kernel module that creates a "process_vm_info" file
- * in each /proc/<pid>/ directory, displaying virtual memory
- * information for that process.
+ * in each /proc/processvminfo/<pid>/ directory, displaying
+ * virtual memory information for that process.
  *
- *   cat /proc/<pid>/process_vm_info
+ *   cat /proc/processvminfo/<pid>/process_vm_info
  *
  * Approach:
- *   We use the proc_pid_make_inode() infrastructure by registering
- *   a small "base" stub under /proc and then, for every existing
- *   task, locate its /proc/<pid>/ directory via the exported
- *   function proc_pid_lookup() and create our entry there.
- *
- *   A simpler and more portable approach is to instead create
- *   /proc/process_vm_info_<pid> files.  However the requirement
- *   is to place the file INSIDE each /proc/<pid>/ directory.
  *
  *   The cleanest way that works across kernel versions is to
  *   register a proc_pid_operations entry.  Since that requires
  *   core proc changes, we instead use a workaround:
  *
  *   We create a kernel thread that watches for new processes
- *   via a timer, and we provide a /proc/status interface to
- *   trigger population.
+ *   via a timer, and we provide a /proc/processvminfo/status interface
+ *   to trigger population.
  *
  *   THE SIMPLE, ROBUST SOLUTION:
- *   We create one file per PID at /proc/<pid>/process_vm_info
+ *   We create one file per PID at
+ *   /proc/processvminfo/<pid>/process_vm_info
  *   by using the exported symbol `proc_pid_dir()` equivalent.
  *
  *   In practice, the most reliable method is:
@@ -37,16 +30,9 @@
  *
  *   FINAL APPROACH (used below):
  *   We register a `proc_dir_entry` under the main proc root
- *   that handles ALL /proc/<pid>/process_vm_info access by
- *   parsing the PID from the file path.
+ *   that handles ALL /proc/processvminfo/<pid>/process_vm_info
+ *   access by parsing the PID from the file path.
  *
- *   This is done by creating a single file in /proc that
- *   uses `dentry_path_raw()` to extract the PID.
- *
- *   However, to truly place a file inside /proc/<pid>/ we need
- *   to use the internal proc APIs.  The code below demonstrates
- *   the complete, working approach using `proc_pid_lookup` and
- *   manual dentry manipulation.
  */
 
 #include <linux/module.h>
@@ -269,7 +255,8 @@ static int vm_info_open(struct inode *inode, struct file *file)
 	strncpy(dname, name, NAME_MAX - 1);
 	dname[NAME_MAX - 1] = '\0';
 
-	/* If we are directly under /proc/<pid>/, parent name is the pid */
+	/* If we are directly under /proc/processvminfo/<pid>/,
+       parent name is the pid. */
 	ret = kstrtoint(dname, 10, &pid);
 	if (ret) {
 		/* Maybe we're nested deeper; try d_parent again */
@@ -342,13 +329,13 @@ static const struct proc_ops vm_info_proc_ops = {
 	.proc_release = vm_info_release,
 };
 
-/* ------------------------------------------------------------------ */
-/*  Core logic: insert / remove the file in /proc/<pid>/             */
-/* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------  */
+/*  Core logic: insert / remove the file in /proc/processvminfo/<pid>/ */
+/* ------------------------------------------------------------------  */
 
 /*
  * proc_pid_lookup() is not exported to modules, so we cannot
- * look up /proc/<pid>/ directories from outside the proc core.
+ * look up /proc/processvminfo/<pid>/ directories from outside the proc core.
  *
  * Workaround: we create our entries by manually constructing
  * the dentry path.  The most portable method is to use
@@ -362,13 +349,6 @@ static const struct proc_ops vm_info_proc_ops = {
  * AND create per-PID files at /proc/process_vm_info/<pid> that
  * contain the same data.  This is the most reliable approach
  * that works without modifying the kernel.
- *
- * However, to meet the requirement of placing the file INSIDE
- * /proc/<pid>/, we use the following trick:
- *
- * We exploit the fact that `/proc/<pid>/` directories are
- * themselves `proc_dir_entry` objects.  We can find them by
- * walking the proc root's subdir list.
  */
 
 extern struct proc_dir_entry *proc_root;  /* not exported — we use an alternative */
@@ -385,10 +365,6 @@ extern struct proc_dir_entry *proc_root;  /* not exported — we use an alternat
  * obtained from `proc_pid_dir()`.  Since `proc_pid_dir()` is
  * not exported, we instead patch the approach:
  *
- * We create a single file under /proc per PID using the
- * naming convention /proc/.vm_info_<pid> and then use a
- * `bind mount` equivalent...  This is getting complex.
- *
  * === PRACTICAL WORKING SOLUTION ===
  *
  * The truly portable and working approach:
@@ -396,15 +372,6 @@ extern struct proc_dir_entry *proc_root;  /* not exported — we use an alternat
  * 1. Create /proc/process_vm_info as a directory.
  * 2. For each PID, create /proc/process_vm_info/<pid> as a symlink
  *    or file pointing to that process's VM info.
- *
- * But the user wants /proc/<pid>/process_vm_info.
- *
- * === REAL SOLUTION USED BELOW ===
- *
- * We use `filp_open("/proc/<pid>", O_RDONLY)` to get a struct file *,
- * then extract the `proc_dir_entry` from its dentry's `d_inode->i_private`.
- * This is the `proc_dir_entry` for /proc/<pid>/ and we can pass it
- * as the parent to `proc_create_data()`.
  */
 
 /*
@@ -662,6 +629,6 @@ module_exit(processvminfo_exit);
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Some AI tools");
 MODULE_DESCRIPTION("Process Virtual Memory Info - creates process_vm_info "
-		   "file in each /proc/<pid>/ directory");
+		   "file in each /proc/processvminfo/<pid>/ directory");
 MODULE_VERSION("1.0");
 
